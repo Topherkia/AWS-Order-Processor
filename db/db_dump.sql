@@ -1,7 +1,8 @@
 CREATE TABLE `Items`(
     `id` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     `Name` VARCHAR(255) NOT NULL,
-    `image_url` VARCHAR(255) NOT NULL,
+    `Description` TEXT NULL,
+    `image_url` VARCHAR(255) NULL,
     `price` DECIMAL(8, 2) NOT NULL
 );
 CREATE TABLE `order_items`(
