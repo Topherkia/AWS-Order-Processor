@@ -29,7 +29,7 @@ class ShopRepository(private val api: ShopApi = ShopClient.api) {
         api.placeOrder(request).orderId
     }
 
-    suspend fun order(orderId: String): Result<OrderSummary> = safeCall { api.getOrder(orderId) }
+    suspend fun orders(): Result<List<OrderSummary>> = safeCall { api.getOrders() }
 
     // Coroutine cancellation is rethrown, never swallowed.
     private suspend inline fun <T> safeCall(block: () -> T): Result<T> =

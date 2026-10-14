@@ -21,7 +21,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -34,12 +33,15 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -48,12 +50,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 import java.util.Locale
 
 private const val CURRENCY = "€"   // change if needed
-
-// TODO: replace with the real support contact shown in the error popup
-const val SUPPORT_CONTACT = "support@example.com"
+private const val ORDERS_POLL_INTERVAL_MS = 3_000L
 
 fun formatPrice(value: Double): String = String.format(Locale.US, "%s%.2f", CURRENCY, value)
 
@@ -70,7 +71,8 @@ fun LoginScreen(state: ShopUiState, onLogin: (String, String) -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("AWS Shop", style = MaterialTheme.typography.headlineMedium)
+        Text("AWS Wholesale", style = MaterialTheme.typography.headlineMedium)
+        Text("Business ordering portal", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(24.dp))
 
         OutlinedTextField(
@@ -112,7 +114,7 @@ fun LoginScreen(state: ShopUiState, onLogin: (String, String) -> Unit) {
 }
 
 // =====================================================
-// Item list
+// Catalog
 // =====================================================
 @Composable
 fun ShopScreen(
@@ -128,8 +130,8 @@ fun ShopScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text("Shop", style = MaterialTheme.typography.headlineSmall)
-                Text("Hello, ${state.session?.username}", style = MaterialTheme.typography.bodySmall)
+                Text("Catalog", style = MaterialTheme.typography.headlineSmall)
+                Text("Signed in as ${state.session?.username}", style = MaterialTheme.typography.bodySmall)
             }
             TextButton(onClick = onLogout) { Text("Sign out") }
         }
@@ -146,7 +148,7 @@ fun ShopScreen(
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Could not load items")
+                    Text("Could not load the catalog")
                     Spacer(Modifier.height(8.dp))
                     Button(onClick = onReload) { Text("Try again") }
                 }
@@ -167,7 +169,7 @@ fun ShopScreen(
 }
 
 @Composable
-private fun ItemCard(item: Item, inCart: Int, onAdd: (Int) -> Unit) {
+private fun ItemCard(item: Item, inBasket: Int, onAdd: (Int) -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column {
             AsyncImage(
@@ -180,12 +182,12 @@ private fun ItemCard(item: Item, inCart: Int, onAdd: (Int) -> Unit) {
                 Text(
                     item.name,
                     style = MaterialTheme.typography.titleSmall,
-                    maxLines = 2,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(formatPrice(item.price), style = MaterialTheme.typography.bodyMedium)
+                Text("${formatPrice(item.price)} / case", style = MaterialTheme.typography.bodyMedium)
                 Button(onClick = { onAdd(item.id) }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (inCart > 0) "Add to cart ($inCart)" else "Add to cart")
+                    Text(if (inBasket > 0) "Add to basket ($inBasket)" else "Add to basket")
                 }
             }
         }
@@ -193,7 +195,7 @@ private fun ItemCard(item: Item, inCart: Int, onAdd: (Int) -> Unit) {
 }
 
 // =====================================================
-// Cart + checkout
+// Basket + submitting an order
 // =====================================================
 @Composable
 fun CartScreen(
@@ -207,17 +209,16 @@ fun CartScreen(
         state.items.find { it.id == id }?.let { it to qty }
     }
     val total = lines.sumOf { (item, qty) -> item.price * qty }
-    val processing = state.checkout is CheckoutState.Processing
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Cart", style = MaterialTheme.typography.headlineSmall)
+        Text("Basket", style = MaterialTheme.typography.headlineSmall)
 
         Box(Modifier.weight(1f)) {
             if (lines.isEmpty()) {
-                Text("Your cart is empty")
+                Text("Your basket is empty")
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(lines, key = { it.first.id }) { (item, qty) ->
@@ -232,10 +233,14 @@ fun CartScreen(
 
         Button(
             onClick = onOrder,
-            enabled = lines.isNotEmpty() && !processing,
+            enabled = lines.isNotEmpty() && !state.placing,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Place order · ${formatPrice(total)}")
+            if (state.placing) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            } else {
+                Text("Submit order · ${formatPrice(total)}")
+            }
         }
     }
 }
@@ -249,7 +254,7 @@ private fun CartRow(item: Item, qty: Int, onAdd: (Int) -> Unit, onRemove: (Int) 
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Column(Modifier.weight(1f)) {
-                Text(item.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(item.name, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(
                     "${formatPrice(item.price)} × $qty = ${formatPrice(item.price * qty)}",
                     style = MaterialTheme.typography.bodySmall
@@ -292,52 +297,14 @@ private fun SimulationPanel(selected: SimulateMode, onSelect: (SimulateMode) -> 
 }
 
 // =====================================================
-// Checkout popups: "processing" and "something has gone wrong"
+// Order confirmation (shown as soon as the order is accepted)
 // =====================================================
 @Composable
-fun CheckoutDialogs(
-    checkout: CheckoutState,
-    onRetry: () -> Unit,
-    onClose: () -> Unit
+fun ConfirmationScreen(
+    order: PlacedOrder,
+    onViewOrders: () -> Unit,
+    onContinue: () -> Unit
 ) {
-    when (checkout) {
-        is CheckoutState.Processing -> AlertDialog(
-            onDismissRequest = {},          // cannot be dismissed while the order is in flight
-            confirmButton = {},
-            title = { Text("Processing your order") },
-            text = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    CircularProgressIndicator(Modifier.size(32.dp), strokeWidth = 3.dp)
-                    Text("Please wait a moment.")
-                }
-            }
-        )
-
-        is CheckoutState.Failed -> AlertDialog(
-            onDismissRequest = onClose,
-            title = { Text("Something has gone wrong") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    checkout.hint?.let { Text(it) }
-                    Text("Please try again. If this issue persists, please contact $SUPPORT_CONTACT.")
-                }
-            },
-            confirmButton = { Button(onClick = onRetry) { Text("Try again") } },
-            dismissButton = { TextButton(onClick = onClose) { Text("Close") } }
-        )
-
-        else -> Unit
-    }
-}
-
-// =====================================================
-// Order confirmation (shown after the order succeeds)
-// =====================================================
-@Composable
-fun ConfirmationScreen(order: OrderSummary, onContinue: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -368,8 +335,8 @@ fun ConfirmationScreen(order: OrderSummary, onContinue: () -> Unit) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(
                             "${line.name} ×${line.quantity}",
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1,
+                            modifier = Modifier.weight(1f).padding(end = 8.dp),
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(formatPrice(line.unitPrice * line.quantity))
@@ -384,8 +351,99 @@ fun ConfirmationScreen(order: OrderSummary, onContinue: () -> Unit) {
         }
 
         Spacer(Modifier.weight(1f))
-        Button(onClick = onContinue, modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = onViewOrders, modifier = Modifier.fillMaxWidth()) {
+            Text("View my orders")
+        }
+        OutlinedButton(onClick = onContinue, modifier = Modifier.fillMaxWidth()) {
             Text("Continue shopping")
+        }
+    }
+}
+
+// =====================================================
+// Order history / status
+// =====================================================
+@Composable
+fun OrdersScreen(state: ShopUiState, onRefresh: () -> Unit) {
+    val hasPending by rememberUpdatedState(
+        state.orders.any { it.status == "RECEIVED" || it.status == "PROCESSING" }
+    )
+    val refresh by rememberUpdatedState(onRefresh)
+
+    // Refresh when the tab opens, then keep refreshing while any order is still in progress.
+    LaunchedEffect(Unit) {
+        refresh()
+        while (true) {
+            delay(ORDERS_POLL_INTERVAL_MS)
+            if (hasPending) refresh()
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Orders", style = MaterialTheme.typography.headlineSmall)
+            TextButton(onClick = onRefresh) { Text("Refresh") }
+        }
+
+        if (state.ordersError) {
+            Text("Could not refresh your orders.", color = MaterialTheme.colorScheme.error)
+        }
+
+        when {
+            !state.ordersLoaded && !state.ordersError ->
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+
+            state.orders.isEmpty() -> Text("No orders yet")
+
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(state.orders, key = { it.orderId }) { OrderCard(it) }
+            }
+        }
+    }
+}
+
+/**
+ * Customer-facing status labels. Retries are hidden from the customer, and an order that ended up in
+ * the DLQ (FAILED) is shown as "Under review" because the operations team will handle it.
+ */
+@Composable
+private fun statusStyle(status: String): Pair<String, Color> = when (status) {
+    "DONE" -> "Confirmed" to MaterialTheme.colorScheme.primary
+    "FAILED" -> "Under review" to MaterialTheme.colorScheme.tertiary
+    "PROCESSING" -> "Processing" to MaterialTheme.colorScheme.secondary
+    else -> "Received" to MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+@Composable
+private fun OrderCard(order: OrderSummary) {
+    val (label, color) = statusStyle(order.status)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Order #${order.orderId.take(8)}", style = MaterialTheme.typography.titleSmall)
+                Text(label, color = color, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            }
+            Text(order.createdAt.replace('T', ' ').take(16), style = MaterialTheme.typography.bodySmall)
+            order.lines.forEach { line ->
+                Text("${line.name} ×${line.quantity}", style = MaterialTheme.typography.bodyMedium)
+            }
+            Text("Total ${formatPrice(order.total)}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+
+            if (order.status == "FAILED") {
+                Text(
+                    "Our team is reviewing this order and will contact you if anything is needed.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
 }

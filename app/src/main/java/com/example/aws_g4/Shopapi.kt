@@ -6,7 +6,6 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
-import retrofit2.http.Path
 import java.util.concurrent.TimeUnit
 
 /** Keeps the login token in memory only (demo). In production use EncryptedSharedPreferences or similar. */
@@ -22,12 +21,13 @@ interface ShopApi {
     @GET("items")
     suspend fun getItems(): List<Item>
 
+    /** Returns 202 as soon as the order is queued. Processing happens asynchronously (SQS -> Lambda). */
     @POST("orders")
     suspend fun placeOrder(@Body body: PlaceOrderRequest): PlaceOrderResponse
 
-    /** Status of one order. The server must only return orders owned by the caller. */
-    @GET("orders/{id}")
-    suspend fun getOrder(@Path("id") id: String): OrderSummary
+    /** Order history of the signed-in customer. The server must only return the caller's own orders. */
+    @GET("orders")
+    suspend fun getOrders(): List<OrderSummary>
 }
 
 object ShopClient {

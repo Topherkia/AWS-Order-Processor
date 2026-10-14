@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -46,8 +47,9 @@ class MainActivity : ComponentActivity() {
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
 
 private val tabs = listOf(
-    Tab("shop", "Shop", Icons.Default.Home),
-    Tab("cart", "Cart", Icons.Default.ShoppingCart)
+    Tab("shop", "Catalog", Icons.Default.Home),
+    Tab("cart", "Basket", Icons.Default.ShoppingCart),
+    Tab("orders", "Orders", Icons.Default.List)
 )
 
 private const val ROUTE_CONFIRMATION = "confirmation"
@@ -75,28 +77,25 @@ private fun MainScaffold(state: ShopUiState, vm: ShopViewModel) {
         }
     }
 
-    // When the order succeeds, go to the confirmation screen.
-    LaunchedEffect(state.checkout) {
-        if (state.checkout is CheckoutState.Success) {
+    // As soon as the backend accepts the order, show the confirmation screen.
+    LaunchedEffect(state.placedOrder) {
+        if (state.placedOrder != null) {
             nav.navigate(ROUTE_CONFIRMATION) { launchSingleTop = true }
         }
     }
-
-    // "Processing your order" popup and the "Something has gone wrong" popup.
-    CheckoutDialogs(
-        checkout = state.checkout,
-        onRetry = vm::placeOrder,
-        onClose = vm::dismissCheckout
-    )
 
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
     val cartCount = state.cart.values.sum()
 
-    val continueShopping = {
-        vm.dismissCheckout()
-        nav.popBackStack("shop", inclusive = false)
-        Unit
+    // Leaves the confirmation screen and opens one of the tabs.
+    val goTo: (String) -> Unit = { route ->
+        vm.dismissConfirmation()
+        nav.navigate(route) {
+            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
     }
 
     Scaffold(
@@ -149,11 +148,17 @@ private fun MainScaffold(state: ShopUiState, vm: ShopViewModel) {
                     onOrder = vm::placeOrder
                 )
             }
+            composable("orders") {
+                OrdersScreen(state = state, onRefresh = vm::refreshOrders)
+            }
             composable(ROUTE_CONFIRMATION) {
-                BackHandler { continueShopping() }
-                val order = (state.checkout as? CheckoutState.Success)?.order
-                if (order != null) {
-                    ConfirmationScreen(order = order, onContinue = { continueShopping() })
+                BackHandler { goTo("shop") }
+                state.placedOrder?.let { order ->
+                    ConfirmationScreen(
+                        order = order,
+                        onViewOrders = { goTo("orders") },
+                        onContinue = { goTo("shop") }
+                    )
                 }
             }
         }

@@ -2,8 +2,6 @@ package com.example.aws_g4
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,15 +9,15 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-/** Where the current checkout is. Drives the processing popup, the error popup and the confirmation screen. */
-sealed interface CheckoutState {
-    object Idle : CheckoutState
-    object Processing : CheckoutState
-    data class Success(val order: OrderSummary) : CheckoutState
-
-    /** hint: optional extra line, e.g. "Please check your network connection." (null = the order failed in the backend / DLQ) */
-    data class Failed(val hint: String? = null) : CheckoutState
-}
+/**
+ * What the confirmation screen shows. Built from the basket at the moment the backend accepts
+ * the order (HTTP 202), so it does not depend on how the asynchronous processing ends.
+ */
+data class PlacedOrder(
+    val orderId: String,
+    val lines: List<OrderLine>,
+    val total: Double
+)
 
 data class ShopUiState(
     val session: Session? = null,
@@ -29,9 +27,14 @@ data class ShopUiState(
     val items: List<Item> = emptyList(),
     val itemsLoading: Boolean = false,
 
-    val cart: Map<Int, Int> = emptyMap(),          // itemId -> quantity
+    val cart: Map<Int, Int> = emptyMap(),          // itemId -> quantity (cases)
     val simulate: SimulateMode = SimulateMode.NONE,
-    val checkout: CheckoutState = CheckoutState.Idle,
+    val placing: Boolean = false,
+    val placedOrder: PlacedOrder? = null,          // non-null = show the confirmation screen
+
+    val orders: List<OrderSummary> = emptyList(),
+    val ordersLoaded: Boolean = false,
+    val ordersError: Boolean = false,
 
     val message: String? = null                    // one-shot notice (snackbar)
 )
@@ -43,10 +46,8 @@ class ShopViewModel(
     private val _state = MutableStateFlow(ShopUiState())
     val state: StateFlow<ShopUiState> = _state.asStateFlow()
 
-    // Reuse the same orderId when retrying with the same cart, so a retry can never create a duplicate order.
-    // It is reset after a confirmed success or failure, and whenever the cart changes.
+    // Reuse the same orderId when retrying with the same basket, so a retry can never create a duplicate order.
     private var pendingOrderId: String? = null
-    private var checkoutJob: Job? = null
 
     // ---------- Authentication ----------
     fun login(username: String, password: String) {
@@ -61,6 +62,7 @@ class ShopViewModel(
                 .onSuccess { session ->
                     _state.update { it.copy(session = session, loggingIn = false) }
                     loadItems()
+                    fetchOrders()
                 }
                 .onFailure { e ->
                     _state.update { it.copy(loggingIn = false, loginError = friendlyMessage(e)) }
@@ -69,13 +71,12 @@ class ShopViewModel(
     }
 
     fun logout() {
-        checkoutJob?.cancel()
         pendingOrderId = null
         repo.logout()
         _state.value = ShopUiState()
     }
 
-    // ---------- Items ----------
+    // ---------- Catalog ----------
     fun loadItems() {
         viewModelScope.launch {
             _state.update { it.copy(itemsLoading = true) }
@@ -86,7 +87,7 @@ class ShopViewModel(
         }
     }
 
-    // ---------- Cart ----------
+    // ---------- Basket ----------
     fun addToCart(itemId: Int) {
         pendingOrderId = null
         _state.update { st ->
@@ -106,55 +107,50 @@ class ShopViewModel(
         _state.update { it.copy(simulate = mode) }
     }
 
-    // ---------- Checkout ----------
+    // ---------- Placing an order ----------
     /**
-     * Sends the order, then polls its status until the backend finishes:
-     *  DONE   -> CheckoutState.Success (the UI navigates to the confirmation screen)
-     *  FAILED -> CheckoutState.Failed  (the order ended up in the DLQ; the UI shows the error popup)
-     * Also used by the "Try again" button of the error popup.
+     * Sends the order. As soon as the backend accepts it (202) the customer sees the confirmation
+     * screen, whatever happens afterwards. If the order later ends up in the DLQ, the customer is not
+     * interrupted; the order history shows it as "Under review" while the operations team handles it.
+     * Only a failure to SEND the order (network / 4xx / 5xx) is reported, because then it was not accepted.
      */
     fun placeOrder() {
         val st = _state.value
-        if (st.checkout is CheckoutState.Processing || st.cart.isEmpty()) return
+        if (st.placing || st.cart.isEmpty()) return
         val orderId = pendingOrderId ?: UUID.randomUUID().toString().also { pendingOrderId = it }
 
-        checkoutJob?.cancel()
-        checkoutJob = viewModelScope.launch {
-            setCheckout(CheckoutState.Processing)
+        // Snapshot for the confirmation screen.
+        val lines = st.cart.mapNotNull { (itemId, qty) ->
+            st.items.find { it.id == itemId }?.let { OrderLine(it.id, it.name, qty, it.price) }
+        }
+        val total = lines.sumOf { it.unitPrice * it.quantity }
 
-            val sendError = repo.placeOrder(orderId, st.cart, st.simulate).exceptionOrNull()
-            if (sendError != null) {
-                // pendingOrderId is kept, so trying again resubmits the same order.
-                setCheckout(CheckoutState.Failed(friendlyMessage(sendError)))
-                return@launch
-            }
-
-            val deadline = System.currentTimeMillis() + POLL_LIMIT_MS
-            while (System.currentTimeMillis() < deadline) {
-                delay(POLL_INTERVAL_MS)
-                // A failed poll (e.g. a brief network drop) is ignored; the next poll tries again.
-                val order = repo.order(orderId).getOrNull() ?: continue
-                when (order.status) {
-                    "DONE" -> {
-                        pendingOrderId = null
-                        _state.update { it.copy(cart = emptyMap(), checkout = CheckoutState.Success(order)) }
-                        return@launch
+        viewModelScope.launch {
+            _state.update { it.copy(placing = true) }
+            repo.placeOrder(orderId, st.cart, st.simulate)
+                .onSuccess {
+                    pendingOrderId = null
+                    _state.update {
+                        it.copy(cart = emptyMap(), placedOrder = PlacedOrder(orderId, lines, total))
                     }
-                    "FAILED" -> {
-                        pendingOrderId = null   // the failed order is final; a retry is a brand-new order
-                        setCheckout(CheckoutState.Failed())
-                        return@launch
-                    }
+                    fetchOrders()
                 }
-            }
-            // Still processing after the time limit. pendingOrderId is kept, so a retry cannot duplicate the order.
-            setCheckout(CheckoutState.Failed("This is taking longer than expected."))
+                .onFailure { e ->
+                    // pendingOrderId is kept, so submitting again resubmits the same order.
+                    postMessage("${friendlyMessage(e)} Your order was not sent. Please try again.")
+                }
+            _state.update { it.copy(placing = false) }
         }
     }
 
-    /** Closes the error popup, or leaves the confirmation screen. */
-    fun dismissCheckout() {
-        _state.update { it.copy(checkout = CheckoutState.Idle) }
+    /** Leaves the confirmation screen. */
+    fun dismissConfirmation() {
+        _state.update { it.copy(placedOrder = null) }
+    }
+
+    // ---------- Order history ----------
+    fun refreshOrders() {
+        viewModelScope.launch { fetchOrders() }
     }
 
     fun consumeMessage() {
@@ -162,16 +158,23 @@ class ShopViewModel(
     }
 
     // ---------- Internal ----------
-    private fun setCheckout(value: CheckoutState) {
-        _state.update { it.copy(checkout = value) }
+    private suspend fun fetchOrders() {
+        repo.orders()
+            .onSuccess { list ->
+                _state.update { st ->
+                    st.copy(
+                        orders = list.sortedByDescending { o -> o.createdAt },
+                        ordersLoaded = true,
+                        ordersError = false
+                    )
+                }
+            }
+            .onFailure {
+                _state.update { st -> st.copy(ordersError = true) }
+            }
     }
 
     private fun postMessage(text: String) {
         _state.update { it.copy(message = text) }
-    }
-
-    private companion object {
-        const val POLL_INTERVAL_MS = 2_000L
-        const val POLL_LIMIT_MS = 60_000L
     }
 }
