@@ -225,8 +225,6 @@ Covers `FakeShopApi` (catalog, idempotent orders, validation, seeded history), `
 
 **Expected:** `BUILD SUCCESSFUL`
 
-**Report:** `app/build/reports/tests/testDebugUnitTest/index.html`
-
 ### AWS Integration (Manual)
 
 | Step                   | Verify                                                 |
