@@ -29,15 +29,25 @@ object ShopClient {
     // TODO: replace with the real Invoke URL from API Gateway (the trailing / is required).
     // Stage "$default" -> https://<id>.execute-api.<region>.amazonaws.com/
     // Stage "prod"     -> https://<id>.execute-api.<region>.amazonaws.com/prod/
-    private const val BASE_URL = "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/"
+    private const val BASE_URL = "https://hbi9etk2qk.execute-api.us-east-1.amazonaws.com/prod/"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .addInterceptor { chain ->
             val builder = chain.request().newBuilder()
-            // MSAL returns a cached token or refreshes it silently, so expiry is handled here.
-            AuthManager.currentToken()?.let { builder.addHeader("Authorization", "Bearer $it") }
+
+            AuthManager.currentToken()?.let { token ->
+             //Auth header added
+                builder.addHeader("Authorization", "Bearer $token")
+
+                val userInfo = JwtUtils.parseAzureToken(token)
+                userInfo?.let { info ->
+                    info.userId?.let { builder.addHeader("X-User-Id", it) }
+                    info.email?.let { builder.addHeader("X-User-Email", it) }
+                }
+            }
+
             chain.proceed(builder.build())
         }
         .build()
