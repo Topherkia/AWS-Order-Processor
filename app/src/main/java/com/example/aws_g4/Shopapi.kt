@@ -14,6 +14,8 @@ object SessionStore {
     var token: String? = null
 }
 
+
+
 interface ShopApi {
     @POST("login")
     suspend fun login(@Body body: LoginRequest): Session
@@ -31,12 +33,11 @@ interface ShopApi {
 }
 
 object ShopClient {
-    // true  = use the in-memory FakeShopApi (no backend needed, for UI work)
-    // false = call the real API Gateway at BASE_URL
-    private val USE_FAKE_API = true
 
-    // TODO: replace with the real URL after deploying API Gateway (the trailing / is required)
-    private const val BASE_URL = "https://YOUR_API_ID.execute-api.eu-north-1.amazonaws.com/prod/"
+    private const val REAL_LOGIN = false
+    private const val REAL_ITEMS = false
+    private const val REAL_ORDER_HISTORY = false
+    private const val BASE_URL = "too lazy to setup env config rn"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -49,15 +50,25 @@ object ShopClient {
         .build()
 
     val api: ShopApi by lazy {
-        if (USE_FAKE_API) {
-            FakeShopApi()
-        } else {
-            Retrofit.Builder()
-                .baseUrl(BASE_URL)
-                .client(client)
-                .addConverterFactory(GsonConverterFactory.create())
-                .build()
-                .create(ShopApi::class.java)
+        val real = Retrofit.Builder()
+            .baseUrl(BASE_URL)
+            .client(client)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(ShopApi::class.java)
+        val fake = FakeShopApi()
+
+        object : ShopApi {
+            override suspend fun login(body: LoginRequest) =
+                if (REAL_LOGIN) real.login(body) else fake.login(body)
+
+            override suspend fun getItems() =
+                if (REAL_ITEMS) real.getItems() else fake.getItems()
+
+            override suspend fun placeOrder(body: PlaceOrderRequest) = real.placeOrder(body)
+
+            override suspend fun getOrders() =
+                if (REAL_ORDER_HISTORY) real.getOrders() else fake.getOrders()
         }
     }
 }
