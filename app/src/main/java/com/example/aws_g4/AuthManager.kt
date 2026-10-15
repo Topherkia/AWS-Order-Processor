@@ -19,9 +19,7 @@ class SignInCancelledException : Exception("Sign-in cancelled")
  * Configuration lives in res/raw/auth_config.json (client id, tenant, redirect URI).
  */
 object AuthManager {
-
-    // TODO: the API scope exposed by the backend app registration, e.g. "api://<api client id>/access"
-    private const val API_SCOPE = "api://YOUR_API_CLIENT_ID/access"
+    private const val API_SCOPE = "1ad91f42-1b69-4fa7-8b35-ed1b9536e97f"
     private val SCOPES = arrayOf(API_SCOPE)
 
     @Volatile
