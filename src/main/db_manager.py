@@ -5,7 +5,6 @@ from datetime import datetime
 class DatabaseManager:
     """
     Shared database utility class for RDS MySQL interactions within an AWS VPC.
-    Encapsulates operations for Orders, Order Items, and Notifications.
     """
     def __init__(self):
         self.host = os.environ.get('DB_HOST')
@@ -25,38 +24,48 @@ class DatabaseManager:
             connect_timeout=5
         )
 
-    def create_order(self, user_id: int, items: list) -> int:
-        """
-        Inserts a new order and its associated order items atomically.
-        items format: [{'item_id': 1, 'quantity': 2}, ...]
-        """
+    def create_order(self, order_uuid: str, user_id: int, lines: list, attempts: int = 1) -> int:
         connection = self._get_connection()
         try:
             with connection.cursor() as cursor:
-                order_query = "INSERT INTO `Orders` (`created_at`, `user_id`) VALUES (%s, %s)"
-                cursor.execute(order_query, (datetime.utcnow(), user_id))
+                try:
+                    cursor.execute(
+                        "INSERT INTO `orders` (`order_uuid`, `user_id`, `status`, `attempts`) "
+                        "VALUES (%s, %s, 'DONE', %s)",
+                        (order_uuid, user_id, attempts),
+                    )
+                except pymysql.err.IntegrityError as e:
+                    if e.args[0] == 1062:  # same orderId already saved: return it, no duplicate
+                        connection.rollback()
+                        cursor.execute("SELECT `id` FROM `orders` WHERE `order_uuid` = %s", (order_uuid,))
+                        return cursor.fetchone()["id"]
+                    raise
                 order_id = cursor.lastrowid
 
-                item_query = "INSERT INTO `order_items` (`order_id`, `item_id`, `quantity`) VALUES (%s, %s, %s)"
-                for item in items:
-                    cursor.execute(item_query, (order_id, item['item_id'], item['quantity']))
+                for line in lines:
+                    cursor.execute("SELECT `price` FROM `items` WHERE `id` = %s", (line["itemId"],))
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise ValueError(f"Unknown item {line['itemId']}")
+                    cursor.execute(
+                        "INSERT INTO `order_items` (`order_id`, `item_id`, `quantity`, `unit_price`) "
+                        "VALUES (%s, %s, %s, %s)",
+                        (order_id, line["itemId"], line["quantity"], row["price"]),
+                    )
 
             connection.commit()
             return order_id
-        except Exception as e:
+        except Exception:
             connection.rollback()
-            raise e
+            raise
         finally:
             connection.close()
 
     def add_notification(self, user_id: int, message: str, notification_type: str) -> int:
-        """
-        Inserts a notification record linked to a customer.
-        """
         connection = self._get_connection()
         try:
             with connection.cursor() as cursor:
-                query = "INSERT INTO `Notification` (`user_id`, `message`, `type`) VALUES (%s, %s, %s)"
+                query = "INSERT INTO `notifications` (`user_id`, `message`, `type`) VALUES (%s, %s, %s)"
                 cursor.execute(query, (user_id, message, notification_type))
             connection.commit()
             return cursor.lastrowid
