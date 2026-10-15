@@ -62,10 +62,7 @@ fun formatPrice(value: Double): String = String.format(Locale.US, "%s%.2f", CURR
 // Login
 // =====================================================
 @Composable
-fun LoginScreen(state: ShopUiState, onLogin: (String, String) -> Unit) {
-    var username by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-
+fun LoginScreen(state: ShopUiState, onSignIn: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.Center,
@@ -73,41 +70,22 @@ fun LoginScreen(state: ShopUiState, onLogin: (String, String) -> Unit) {
     ) {
         Text("AWS Wholesale", style = MaterialTheme.typography.headlineMedium)
         Text("Business ordering portal", style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(24.dp))
-
-        OutlinedTextField(
-            value = username,
-            onValueChange = { username = it },
-            label = { Text("Username") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Password") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            modifier = Modifier.fillMaxWidth()
-        )
+        Spacer(Modifier.height(32.dp))
 
         state.loginError?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(it, color = MaterialTheme.colorScheme.error)
+            Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(12.dp))
         }
 
-        Spacer(Modifier.height(16.dp))
         Button(
-            onClick = { onLogin(username, password) },
+            onClick = onSignIn,
             enabled = !state.loggingIn,
             modifier = Modifier.fillMaxWidth()
         ) {
             if (state.loggingIn) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             } else {
-                Text("Sign in")
+                Text("Sign in with Microsoft")
             }
         }
     }

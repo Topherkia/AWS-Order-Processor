@@ -4,7 +4,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.Alignment
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
@@ -26,7 +31,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -34,12 +38,32 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 
 class MainActivity : ComponentActivity() {
+    private val vm: ShopViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Restores a previously signed-in Microsoft account, if there is one.
+        AuthManager.init(this) { username ->
+            if (username != null) vm.signedIn(username) else vm.noSavedSession()
+        }
+
         setContent {
             MaterialTheme {
-                ShopApp()
+                ShopApp(vm = vm, onSignIn = ::startSignIn)
             }
+        }
+    }
+
+    private fun startSignIn() {
+        vm.signInStarted()
+        AuthManager.signIn(this) { result ->
+            result
+                .onSuccess { username -> vm.signedIn(username) }
+                .onFailure { e ->
+                    if (e is SignInCancelledException) vm.signInCancelled()
+                    else vm.signInFailed(AuthManager.describe(e))
+                }
         }
     }
 }
@@ -55,13 +79,15 @@ private val tabs = listOf(
 private const val ROUTE_CONFIRMATION = "confirmation"
 
 @Composable
-fun ShopApp(vm: ShopViewModel = viewModel()) {
+fun ShopApp(vm: ShopViewModel, onSignIn: () -> Unit) {
     val state by vm.state.collectAsState()
 
-    if (state.session == null) {
-        LoginScreen(state = state, onLogin = vm::login)
-    } else {
-        MainScaffold(state = state, vm = vm)
+    when {
+        state.initializing -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        state.session == null -> LoginScreen(state = state, onSignIn = onSignIn)
+        else -> MainScaffold(state = state, vm = vm)
     }
 }
 

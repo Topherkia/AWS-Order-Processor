@@ -1,8 +1,9 @@
 package com.example.aws_g4
 
 // ---- Authentication ----
-data class LoginRequest(val username: String, val password: String)
-data class Session(val customerId: Long, val username: String, val token: String)
+// Sign-in is handled by Microsoft Entra ID (see AuthManager). The app only keeps who is signed in;
+// tokens are held and refreshed by MSAL.
+data class Session(val username: String)
 
 // ---- Items ----
 data class Item(
