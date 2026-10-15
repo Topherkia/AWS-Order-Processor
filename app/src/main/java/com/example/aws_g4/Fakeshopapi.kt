@@ -61,12 +61,6 @@ class FakeShopApi : ShopApi {
 
     // ---------------- ShopApi ----------------
 
-    override suspend fun login(body: LoginRequest): Session {
-        delay(NETWORK_DELAY_MS)
-        if (body.password == "wrong") throw httpError(401)
-        return Session(customerId = 1L, username = body.username, token = "fake-token")
-    }
-
     override suspend fun getItems(): List<Item> {
         delay(NETWORK_DELAY_MS)
         return items

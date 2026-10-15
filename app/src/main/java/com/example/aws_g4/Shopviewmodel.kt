@@ -20,6 +20,7 @@ data class PlacedOrder(
 )
 
 data class ShopUiState(
+    val initializing: Boolean = true,              // true until MSAL has checked for a saved account
     val session: Session? = null,
     val loggingIn: Boolean = false,
     val loginError: String? = null,
@@ -49,31 +50,38 @@ class ShopViewModel(
     // Reuse the same orderId when retrying with the same basket, so a retry can never create a duplicate order.
     private var pendingOrderId: String? = null
 
-    // ---------- Authentication ----------
-    fun login(username: String, password: String) {
-        if (username.isBlank() || password.isBlank()) {
-            _state.update { it.copy(loginError = "Please enter your username and password") }
-            return
+    // ---------- Authentication (Microsoft Entra ID via MSAL, driven from MainActivity) ----------
+    /** MSAL found no saved account: show the sign-in screen. */
+    fun noSavedSession() {
+        _state.update { it.copy(initializing = false) }
+    }
+
+    fun signInStarted() {
+        _state.update { it.copy(loggingIn = true, loginError = null) }
+    }
+
+    /** Called after an interactive sign-in or when a saved account was restored. */
+    fun signedIn(username: String) {
+        if (_state.value.session != null) return        // e.g. called again after a configuration change
+        _state.update {
+            it.copy(session = Session(username), initializing = false, loggingIn = false, loginError = null)
         }
-        if (_state.value.loggingIn) return
-        viewModelScope.launch {
-            _state.update { it.copy(loggingIn = true, loginError = null) }
-            repo.login(username.trim(), password)
-                .onSuccess { session ->
-                    _state.update { it.copy(session = session, loggingIn = false) }
-                    loadItems()
-                    fetchOrders()
-                }
-                .onFailure { e ->
-                    _state.update { it.copy(loggingIn = false, loginError = friendlyMessage(e)) }
-                }
-        }
+        loadItems()
+        refreshOrders()
+    }
+
+    fun signInFailed(message: String) {
+        _state.update { it.copy(loggingIn = false, loginError = message) }
+    }
+
+    fun signInCancelled() {
+        _state.update { it.copy(loggingIn = false) }
     }
 
     fun logout() {
         pendingOrderId = null
         repo.logout()
-        _state.value = ShopUiState()
+        _state.value = ShopUiState(initializing = false)
     }
 
     // ---------- Catalog ----------
