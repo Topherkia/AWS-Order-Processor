@@ -101,21 +101,57 @@ A cafe owner places an order for ingredients. The system processes it automatica
 
 ---
 
-## Lambda Functions
+## Lambda configuration
 
-### Lambda 1: Order Processor
+All functions: Python 3.12, execution role `LabRole`, region `us-east-1`, RDS VPC
+(`vpc-0b823582d7fd0c439`), security group `sg-099c10577814e67e1` (self-reference
+inbound MySQL; VPC interface endpoint for SNS for outbound). Each package contains
+its handler file, `db_manager.py`, and the `pymysql/` folder.
 
-- write as we come up
+### Lambda 1: Order Processor (`order-processor`)
 
-### Lambda 2: DB Logger & Push
+| Setting          | Value                                                                                                                                                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Handler          | `lambda_function.lambda_handler`                                                                                                                                                                             |
+| Trigger          | SQS `main-order-queue`                                                                                                                                                                                       |
+| Memory / timeout | 128 MB / 10 s                                                                                                                                                                                                |
+| Behavior         | Parses `{orderId, lines, simulate}`, saves the order to `orders` (status `DONE`) and `order_items` (prices read from `items`), then publishes to `order-success-topic`. Idempotent on `order_uuid` (unique). |
 
-- write as we come up
+### Lambda 2: DB Logger and Push (`DBLoggerPush`)
+
+| Setting          | Value                                                                                                             |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Handler          | `lambda_function.lambda_handler`                                                                                  |
+| Triggers         | SNS `order-success-topic` **and** SNS `order-failure-topic`                                                       |
+| Memory / timeout | 128 MB / 10 s                                                                                                     |
+| Behavior         | Writes `ORDER_DONE` / `ORDER_FAILED` rows to `notifications` and broadcasts a placeholder WebSocket/push message. |
+
+### Read Lambda: `shop-api` (optional)
+
+Handles `GET /items`, `GET /orders`, and `POST /login` behind API Gateway (Lambda proxy integration).
+
+### Environment variables
+
+| Name                    | Used by  | Value                               |
+| ----------------------- | -------- | ----------------------------------- |
+| `DB_HOST`               | all      | RDS endpoint                        |
+| `DB_USER`               | all      | database user                       |
+| `DB_PASSWORD`           | all      | set in the console, never committed |
+| `DB_NAME`               | all      | `orders`                            |
+| `DB_PORT`               | all      | `3306`                              |
+| `SNS_SUCCESS_TOPIC_ARN` | Lambda 1 | ARN of `order-success-topic`        |
+
+The test user (`TEST_USER_ID = 1`, customer `demo`) is hardcoded in Lambda 1 and Lambda 2.
 
 ---
 
 ## Failure & Retry Logic
 
-- write as we come up
+- Lambda 1 raises an exception on failure (or when `simulate` requests it)
+- SQS redelivers the message up to `maxReceiveCount = 3`
+- After the third failure, the message moves to the **DLQ**
+- The DLQ publishes to **SNS 2 (`order-failure-topic`)**
+- Lambda 2 logs the failure and pushes a notification to the user
 
 ---
 
@@ -123,28 +159,45 @@ A cafe owner places an order for ingredients. The system processes it automatica
 
 ```
 AWS-Order-Processor/
+├── app/
+│   └── src/test/java/com/example/aws_g4/
+│       ├── FakeShopApiTest.kt
+│       ├── ShopRepositoryTest.kt
+│       ├── FriendlyMessageTest.kt
+│       └── SimulateModeTest.kt
+├── src/
+│   ├── main/
+│   │   ├── db_manager.py
+│   │   ├── lambda_1_processor.py
+│   │   └── lambda_2_logger_push.py
+│   └── test/
+│       ├── conftest.py
+│       ├── test_db_manager.py
+│       ├── test_lambda_1_processor.py
+│       └── test_lambda_2_logger_push.py
+
 ├── docs/
-│   └── db_schema_image.png
-├── main/
-│   ├── db_manager.py
-│   ├── lambda_order_processor.py
-│   └── lambda_db_logger.py
-├── sql/
-│   └── schema.sql
+│   ├── architecture.jpeg
+│   ├── db_schema_image.png
+│   ├── docs/db_schema.webp
+    ├── docs/Press_Release_V2.pdf
+    ├── docs/Press_Release.pdf
+    └── docs/requirements.txt
 ├── README.md
-└── requirements.txt
+
 ```
 
 ---
 
 ## Setup
 
-1. **MariaDB (RDS):** Launch in `us-east-1`, run `sql/schema.sql`
-2. **SQS:** Create `OrderQueue` (`maxReceiveCount = 3`) + `OrderDLQ` (redrive policy)
-3. **SNS:** Create `OrderSuccessTopic` + `OrderFailureTopic`; subscribe Lambda 2 to both; link DLQ → SNS 2
-4. **Lambda 1:** Python 3.9+, LabRole, trigger = SQS, set env vars
-5. **Lambda 2:** Python 3.9+, LabRole, trigger = SNS 1 & 2, set env vars
-6. **API Gateway:** POST endpoint → SQS `OrderQueue`
+1. **MariaDB (RDS):** Launch in `us-east-1`, load `sql/schema.sql`
+2. **SQS:** Create `main-order-queue` with a DLQ and `maxReceiveCount = 3`
+3. **SNS:** Create `order-success-topic` + `order-failure-topic`; subscribe `DBLoggerPush` to both
+4. **VPC endpoint:** Create an Interface Endpoint for `com.amazonaws.us-east-1.sns` in the RDS VPC
+5. **Lambda 1 (`order-processor`):** Python 3.12, `LabRole`, SQS trigger, `pymysql` layer, env vars set
+6. **Lambda 2 (`DBLoggerPush`):** Python 3.12, `LabRole`, SNS triggers on both topics, `pymysql` layer, env vars set
+7. **API Gateway:** `POST /orders` → SQS `main-order-queue`
 
 > ⚠️ **Learner Lab reminder:** MariaDB RDS keeps costing money between sessions. Stop or delete it when not testing.
 
@@ -152,16 +205,51 @@ AWS-Order-Processor/
 
 ## Testing
 
-- write as we come up
+The project has two test suites — one for the Python backend (pytest) and one for the Android frontend (JUnit). Both run without AWS credentials or a live database.
+
+### Backend (pytest) — `src/test/`
+
+```bash
+python -m pytest -v
+```
+
+Covers `DatabaseManager` (order/item insert, idempotency, rollback, notifications), Lambda 1 (validation, POISON/TRANSIENT simulation, SNS publish, error propagation), and Lambda 2 (notification logging, broadcast, invalid input). All AWS/DB calls are **mocked**.
+
+**Expected:** `23 passed in ~1s`
+
+### Frontend (JUnit) — `app/src/test/java/com/example/aws_g4/`
+
+```bash
+./gradlew testDebugUnitTest
+```
+
+Covers `FakeShopApi` (catalog, idempotent orders, validation, seeded history), `ShopRepository` (success/failure paths), error message mapping, and `SimulateMode` values.
+
+**Expected:** `BUILD SUCCESSFUL`
+
+**Report:** `app/build/reports/tests/testDebugUnitTest/index.html`
+
+### AWS Integration (Manual)
+
+| Step                   | Verify                                                 |
+| ---------------------- | ------------------------------------------------------ |
+| API Gateway → SQS      | `curl /orders` → message appears in `main-order-queue` |
+| SQS → Lambda 1         | Log: `Saved order <uuid> -> DB id X`                   |
+| Lambda 1 → RDS         | New rows in `orders` and `order_items`                 |
+| Lambda 1 → SNS 1       | `order-success-topic` delivery count increments        |
+| SNS 1 → Lambda 2       | Log: `Logged notification ID X`                        |
+| Lambda 2 → RDS         | New row in `notifications` (type `SUCCESS`)            |
+| Failure → DLQ          | `POISON` order retries 3× then lands in DLQ            |
+| DLQ → SNS 2 → Lambda 2 | `notifications` row written with type `ORDER_FAILED`   |
 
 ---
 
 ## Team
 
-| Name   | Role                                |
-| ------ | ----------------------------------- |
-| [Name] | FrontEnd Developer (Android App UI) |
-| [Name] | Backend Developer (Lambda)          |
-| [Name] | Database and Lambda                 |
-| [Name] | Architecture & coordination         |
-| [Name] | Documentation and testing           |
+| Name                   | Role                                |
+| ---------------------- | ----------------------------------- |
+| Su Kim                 | FrontEnd Developer (Android App UI) |
+| Mustafa Ahmad          | Backend Developer (Lambda)          |
+| Kiavash Montazeri      | Database and Lambda                 |
+| Juan Valenzuela        | Architecture & coordination         |
+| Jiya Kanhirathan Poyil | Testing and Documentation           |
