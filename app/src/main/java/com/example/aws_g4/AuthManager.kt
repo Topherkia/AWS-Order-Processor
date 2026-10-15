@@ -20,7 +20,8 @@ class SignInCancelledException : Exception("Sign-in cancelled")
  */
 object AuthManager {
 
-    private const val API_SCOPE = "1ad91f42-1b69-4fa7-8b35-ed1b9536e97f"
+    // TODO: the API scope exposed by the backend app registration, e.g. "api://<api client id>/access"
+    private const val API_SCOPE = "api://YOUR_API_CLIENT_ID/access"
     private val SCOPES = arrayOf(API_SCOPE)
 
     @Volatile
@@ -55,7 +56,7 @@ object AuthManager {
 
     private fun loadAccount(application: ISingleAccountPublicClientApplication, onAccount: (String?) -> Unit) {
         application.getCurrentAccountAsync(object : ISingleAccountPublicClientApplication.CurrentAccountCallback {
-            override fun onAccountLoaded(activeAccount: IAccount?) = onAccount(activeAccount?.username)
+            override fun onAccountLoaded(activeAccount: IAccount?) = onAccount(activeAccount?.let { displayName(it) })
             override fun onAccountChanged(priorAccount: IAccount?, currentAccount: IAccount?) {
                 if (currentAccount == null) onAccount(null)
             }
@@ -63,7 +64,22 @@ object AuthManager {
         })
     }
 
-    /** Opens the Microsoft sign-in page. Reports the signed-in username. */
+    /**
+     * Text for "Signed in as ...". Azure AD B2C often returns no "username"; MSAL then fills in the
+     * placeholder "Missing from the token response", so the ID-token claims are used first.
+     * For display only: the backend identifies the user from the verified token, never from this.
+     */
+    private fun displayName(account: IAccount): String {
+        val claims = account.claims
+        // B2C sends the literal text "unknown" as "name" for accounts that have no display name.
+        val name = (claims?.get("name") as? String)?.takeIf { it.isNotBlank() && !it.equals("unknown", ignoreCase = true) }
+        val email = ((claims?.get("emails") as? List<*>)?.firstOrNull() as? String)
+            ?: (claims?.get("email") as? String)
+        val username = account.username?.takeIf { it.isNotBlank() && !it.startsWith("Missing from") }
+        return name ?: email ?: username ?: "Signed in"
+    }
+
+    /** Opens the Microsoft sign-in page. Reports the name to display for the signed-in user. */
     fun signIn(activity: Activity, onResult: (Result<String>) -> Unit) {
         val application = app
         if (application == null) {
@@ -72,7 +88,7 @@ object AuthManager {
         }
         application.signIn(activity, null, SCOPES, object : AuthenticationCallback {
             override fun onSuccess(authenticationResult: IAuthenticationResult) {
-                onResult(Result.success(authenticationResult.account.username))
+                onResult(Result.success(displayName(authenticationResult.account)))
             }
 
             override fun onError(exception: MsalException) {
@@ -112,6 +128,6 @@ object AuthManager {
     /** User-facing text; the error code makes configuration problems easy to look up. */
     fun describe(e: Throwable): String {
         val code = (e as? MsalException)?.errorCode
-        return if (code != null) "Sign-in failed ($code). Please try again." else "Sign-in failed. Please try again."
+        return if (code != null) "Sign-in failed ($code). Please try again." else "Sign-in failed: ${e.message}"
     }
 }
