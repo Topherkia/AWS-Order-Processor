@@ -14,10 +14,10 @@ An event-driven, cloud-based order processing system built on AWS that automates
 - [Architecture](#architecture)
 - [AWS Services](#aws-services)
 - [Database Schema (MariaDB)](#database-schema-mariadb)
+- [Setup](#setup)
 - [Lambda Cnfiguration](#lambda-configuration)
 - [Failure & Retry Logic](#failure--retry-logic)
 - [Project Structure](#project-structure)
-- [Setup](#setup)
 - [Testing](#testing)
 - [Team](#team)
 
@@ -96,6 +96,20 @@ A cafe owner places an order for ingredients. The system processes it automatica
 | `Items`        | id (PK), Name, image_url, price                |
 | `order_items`  | id (PK), order_id (FK), item_id (FK), quantity |
 | `Notification` | id (PK), user_id (FK), message, type           |
+
+---
+
+## Setup
+
+1. **MariaDB (RDS):** Launch in `us-east-1`, load `sql/schema.sql`
+2. **SQS:** Create `main-order-queue` with a DLQ and `maxReceiveCount = 3`
+3. **SNS:** Create `order-success-topic` + `order-failure-topic`; subscribe `DBLoggerPush` to both
+4. **VPC endpoint:** Create an Interface Endpoint for `com.amazonaws.us-east-1.sns` in the RDS VPC
+5. **Lambda 1 (`order-processor`):** Python 3.12, `LabRole`, SQS trigger, `pymysql` layer, env vars set
+6. **Lambda 2 (`DBLoggerPush`):** Python 3.12, `LabRole`, SNS triggers on both topics, `pymysql` layer, env vars set
+7. **API Gateway:** `POST /orders` → SQS `main-order-queue`
+
+> ⚠️ **Learner Lab reminder:** MariaDB RDS keeps costing money between sessions. Stop or delete it when not testing.
 
 ---
 
@@ -184,20 +198,6 @@ AWS-Order-Processor/
 ├── README.md
 
 ```
-
----
-
-## Setup
-
-1. **MariaDB (RDS):** Launch in `us-east-1`, load `sql/schema.sql`
-2. **SQS:** Create `main-order-queue` with a DLQ and `maxReceiveCount = 3`
-3. **SNS:** Create `order-success-topic` + `order-failure-topic`; subscribe `DBLoggerPush` to both
-4. **VPC endpoint:** Create an Interface Endpoint for `com.amazonaws.us-east-1.sns` in the RDS VPC
-5. **Lambda 1 (`order-processor`):** Python 3.12, `LabRole`, SQS trigger, `pymysql` layer, env vars set
-6. **Lambda 2 (`DBLoggerPush`):** Python 3.12, `LabRole`, SNS triggers on both topics, `pymysql` layer, env vars set
-7. **API Gateway:** `POST /orders` → SQS `main-order-queue`
-
-> ⚠️ **Learner Lab reminder:** MariaDB RDS keeps costing money between sessions. Stop or delete it when not testing.
 
 ---
 
