@@ -8,16 +8,7 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import java.util.concurrent.TimeUnit
 
-/** Keeps the login token in memory only (demo). In production use EncryptedSharedPreferences or similar. */
-object SessionStore {
-    @Volatile
-    var token: String? = null
-}
-
 interface ShopApi {
-    @POST("login")
-    suspend fun login(@Body body: LoginRequest): Session
-
     @GET("items")
     suspend fun getItems(): List<Item>
 
@@ -33,17 +24,20 @@ interface ShopApi {
 object ShopClient {
     // true  = use the in-memory FakeShopApi (no backend needed, for UI work)
     // false = call the real API Gateway at BASE_URL
-    private val USE_FAKE_API = true
+    private val USE_FAKE_API = false
 
-    // TODO: replace with the real URL after deploying API Gateway (the trailing / is required)
-    private const val BASE_URL = "https://YOUR_API_ID.execute-api.eu-north-1.amazonaws.com/prod/"
+    // TODO: replace with the real Invoke URL from API Gateway (the trailing / is required).
+    // Stage "$default" -> https://<id>.execute-api.<region>.amazonaws.com/
+    // Stage "prod"     -> https://<id>.execute-api.<region>.amazonaws.com/prod/
+    private const val BASE_URL = "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .addInterceptor { chain ->
             val builder = chain.request().newBuilder()
-            SessionStore.token?.let { builder.addHeader("Authorization", "Bearer $it") }
+            // MSAL returns a cached token or refreshes it silently, so expiry is handled here.
+            AuthManager.currentToken()?.let { builder.addHeader("Authorization", "Bearer $it") }
             chain.proceed(builder.build())
         }
         .build()

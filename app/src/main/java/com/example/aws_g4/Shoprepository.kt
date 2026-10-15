@@ -6,12 +6,8 @@ import java.io.IOException
 
 class ShopRepository(private val api: ShopApi = ShopClient.api) {
 
-    suspend fun login(username: String, password: String): Result<Session> =
-        safeCall { api.login(LoginRequest(username, password)) }
-            .onSuccess { SessionStore.token = it.token }
-
     fun logout() {
-        SessionStore.token = null
+        AuthManager.signOut()
     }
 
     suspend fun items(): Result<List<Item>> = safeCall { api.getItems() }
