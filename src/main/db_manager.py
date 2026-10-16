@@ -6,7 +6,7 @@ class DatabaseManager:
     """
     Shared database utility class for RDS MySQL interactions within an AWS VPC.
     """
-    def __init__(self):
+    def init(self):
         self.host = os.environ.get('DB_HOST')
         self.user = os.environ.get('DB_USER')
         self.password = os.environ.get('DB_PASSWORD')
@@ -23,43 +23,58 @@ class DatabaseManager:
             cursorclass=pymysql.cursors.DictCursor,
             connect_timeout=5
         )
-
-    def create_order(self, user_id: int, lines: list) -> int:
-        """
-        Inserts a new order and its associated order items atomically.
-        lines format: [{'itemId': 3, 'quantity': 1}, ...]
-        """
+    
+    def get_items(self, payload):
         connection = self._get_connection()
         try:
             with connection.cursor() as cursor:
-                # 1. Insert into Orders table
-                order_query = "INSERT INTO `Orders` (`created_at`, `user_id`) VALUES (%s, %s)"
-                cursor.execute(order_query, (datetime.utcnow(), user_id))
-                order_id = cursor.lastrowid
-
-                # 2. Insert into order_items table using 'itemId'
-                item_query = "INSERT INTO `order_items` (`order_id`, `item_id`, `quantity`) VALUES (%s, %s, %s)"
-                for line in lines:
-                    cursor.execute(item_query, (order_id, line['itemId'], line['quantity']))
-
+                query = "SELECT * FROM items"
+                cursor.execute(query)
             connection.commit()
-            return order_id
+            return cursor.fetchall()
         except Exception as e:
             connection.rollback()
             raise e
         finally:
             connection.close()
-
-    def add_notification(self, user_id: int, message: str, notification_type: str) -> int:
+    def get_orders(self, payload):
         connection = self._get_connection()
         try:
             with connection.cursor() as cursor:
-                query = "INSERT INTO `Notification` (`user_id`, `message`, `type`) VALUES (%s, %s, %s)"
-                cursor.execute(query, (user_id, message, notification_type))
+                query = "SELECT * FROM orders WHERE user_id = %s"
+                cursor.execute(query, (payload["user_id"],))
             connection.commit()
-            return cursor.lastrowid
+            return cursor.fetchall()
         except Exception as e:
             connection.rollback()
             raise e
         finally:
             connection.close()
+    def get_notifications(self, payload):
+        connection = self._get_connection()
+        try:
+            with connection.cursor() as cursor:
+                query = "SELECT * FROM notifications WHERE user_id = %s"
+                cursor.execute(query, (payload["user_id"],))
+            connection.commit()
+            return cursor.fetchall()
+        except Exception as e:
+            connection.rollback()
+            raise e
+        finally:
+            connection.close()
+    def login(self, payload):
+        connection = self._get_connection()
+        try:
+            with connection.cursor() as cursor:
+                query = "SELECT id FROM customers WHERE email = %s limit 1"
+                cursor.execute(query, (payload["email"],))
+            connection.commit()
+            return cursor.fetchall()
+        except Exception as e:
+            connection.rollback()
+            raise e
+        finally:
+            connection.close()
+    def logout(self, payload):
+        return True
