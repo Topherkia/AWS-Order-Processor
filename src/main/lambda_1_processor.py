@@ -1,47 +1,58 @@
 import json
 import os
 import boto3
-from main.db_manager import DatabaseManager
+from botocore.config import Config
+from db_manager import DatabaseManager
 
-sns_client = boto3.client('sns')
 db_manager = DatabaseManager()
-SUCCESS_TOPIC_ARN = os.environ.get('SNS_SUCCESS_TOPIC_ARN')
+TEST_USER_ID = 1  # hardcoded for the whole project
+SUCCESS_TOPIC_ARN = os.environ.get("SNS_SUCCESS_TOPIC_ARN")
+
+# Short timeouts so a missing VPC endpoint can't freeze the function.
+sns_client = (
+    boto3.client("sns", config=Config(connect_timeout=3, read_timeout=3,
+                                      retries={"max_attempts": 1}))
+    if SUCCESS_TOPIC_ARN else None
+)
+
 
 def lambda_handler(event, context):
-    """
-    Lambda 1: Order Processor triggered by Amazon SQS.
-    """
-    for record in event.get('Records', []):
-        try:
-            # Parse message payload from SQS
-            payload = json.loads(record['body'])
-            user_id = payload.get('user_id')
-            items = payload.get('items', []) # Expected list of {'item_id': int, 'quantity': int}
+    for record in event.get("Records", []):
+        payload = json.loads(record["body"])
+        order_uuid = payload.get("orderId")
+        lines = payload.get("lines", [])
+        if not order_uuid or not lines:
+            raise ValueError("Missing 'orderId' or 'lines'")
 
-            if not user_id or not items:
-                raise ValueError("Invalid payload structure: missing 'user_id' or 'items'.")
+        attempts = int(record["attributes"].get("ApproximateReceiveCount", 1))
+        simulate = payload.get("simulate")
 
-            # Perform DB write operation using the OOP class
-            order_id = db_manager.create_order(user_id=user_id, items=items)
-            print(f"Successfully processed order ID: {order_id} for user ID: {user_id}")
+        # Failure simulation from the app's developer option
+        if simulate == "POISON":
+            raise RuntimeError("Simulated permanent failure")
+        if simulate == "TRANSIENT" and attempts < 3:
+            raise RuntimeError("Simulated temporary failure")
 
-            # Publish success event to SNS 1 (Success Topic)
-            success_message = {
-                "user_id": user_id,
-                "order_id": order_id,
-                "status": "SUCCESS",
-                "message": f"Your order #{order_id} has been successfully placed!"
-            }
-            
-            sns_client.publish(
-                TopicArn=SUCCESS_TOPIC_ARN,
-                Message=json.dumps(success_message),
-                Subject="Order Success Confirmation"
-            )
+        order_id = db_manager.create_order(
+            order_uuid=order_uuid, user_id=TEST_USER_ID, lines=lines, attempts=attempts
+        )
+        print(f"Saved order {order_uuid} -> DB id {order_id} (attempt {attempts})")
 
-        except Exception as e:
-            print(f"Error processing order record {record.get('messageId')}: {str(e)}")
-            # Raising the exception ensures SQS triggers retry / DLQ routing mechanism
-            raise e
+        # Success event to SNS 1. Never fail the order because of SNS.
+        if sns_client:
+            try:
+                sns_client.publish(
+                    TopicArn=SUCCESS_TOPIC_ARN,
+                    Subject="Order Success Confirmation",
+                    Message=json.dumps({
+                        "order_uuid": order_uuid,
+                        "order_id": order_id,
+                        "user_id": TEST_USER_ID,
+                        "status": "SUCCESS",
+                        "message": f"Your order {order_uuid} has been placed.",
+                    }),
+                )
+            except Exception as e:
+                print(f"SNS publish failed for {order_uuid}: {e}")
 
-    return {"status": "Batch processing complete"}
+    return {"status": "ok"}
