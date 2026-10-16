@@ -29,7 +29,8 @@ object ShopClient {
     // TODO: replace with the real Invoke URL from API Gateway (the trailing / is required).
     // Stage "$default" -> https://<id>.execute-api.<region>.amazonaws.com/
     // Stage "prod"     -> https://<id>.execute-api.<region>.amazonaws.com/prod/
-    private const val BASE_URL = "https://hbi9etk2qk.execute-api.us-east-1.amazonaws.com/prod/"
+    //private const val BASE_URL = "https://hbi9etk2qk.execute-api.us-east-1.amazonaws.com/prod/"
+    private const val BASE_URL = "https://lb7e7pyrwl.execute-api.us-east-1.amazonaws.com/"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)

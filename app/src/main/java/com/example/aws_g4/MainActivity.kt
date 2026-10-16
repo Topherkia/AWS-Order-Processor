@@ -115,7 +115,11 @@ private fun MainScaffold(state: ShopUiState, vm: ShopViewModel) {
     val cartCount = state.cart.values.sum()
 
     // Leaves the confirmation screen and opens one of the tabs.
+    // The confirmation entry is removed WITHOUT saving its state first. Otherwise the tab navigation below
+    // (saveState/restoreState) would keep [basket, confirmation] and bring the confirmation route back the
+    // next time the Basket tab is opened, with nothing to show (placedOrder is already null).
     val goTo: (String) -> Unit = { route ->
+        nav.popBackStack(ROUTE_CONFIRMATION, inclusive = true)
         vm.dismissConfirmation()
         nav.navigate(route) {
             popUpTo(nav.graph.findStartDestination().id) { saveState = true }
